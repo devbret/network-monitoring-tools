@@ -1,203 +1,288 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <title>Network Monitoring Tools</title>
-        <script src="https://d3js.org/d3.v7.min.js"></script>
-        <style>
-            body {
-                font-family: 'Orbitron', sans-serif;
-                margin: 0;
-                padding: 0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-                background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-                color: #00ff9c;
+  <head>
+    <meta charset="UTF-8" />
+    <title>Network Monitoring Tools</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+      body {
+        font-family: "Orbitron", sans-serif;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+        color: #00ff9c;
+      }
+      #charts {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 20px;
+        padding: 20px;
+        background-color: rgba(0, 0, 0, 0.8);
+        border-radius: 10px;
+        box-shadow: 0 0 20px rgba(0, 255, 156, 0.5);
+        overflow-y: auto;
+        max-height: 90vh;
+      }
+      .chart {
+        width: 620px;
+        height: 420px;
+        background-color: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 10px;
+        border: 2px solid #00ff9c;
+        box-shadow: 0 0 10px #00ff9c;
+        position: relative;
+      }
+      .chart-title {
+        font-size: 20px;
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 10px;
+      }
+      .line {
+        fill: none;
+        stroke-width: 2px;
+      }
+      .line.bytes_recv {
+        stroke: #00ff9c;
+      }
+      .line.bytes_sent {
+        stroke: #ff69b4;
+      }
+      .line.cpu {
+        stroke: #ffcc00;
+      }
+      .line.memory {
+        stroke: #3399ff;
+      }
+      .line.connections {
+        stroke: #ff0033;
+      }
+      .line.latency {
+        stroke: #9933ff;
+      }
+      .axis--x path,
+      .axis--x line,
+      .axis--y path,
+      .axis--y line {
+        stroke: #333;
+      }
+      .axis--x text,
+      .axis--y text {
+        fill: aqua;
+      }
+      svg text {
+        fill: aqua;
+      }
+      .value {
+        text-align: center;
+        font-size: 18px;
+        margin-top: 10px;
+      }
+    </style>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="charts">
+      <div id="bytes_recv-chart" class="chart">
+        <div class="chart-title">Bandwidth Usage</div>
+        <svg width="600" height="350"></svg>
+        <div class="value" id="bytes_recv-value"></div>
+      </div>
+      <div id="bytes_sent-chart" class="chart">
+        <div class="chart-title">Bandwidth Usage</div>
+        <svg width="600" height="350"></svg>
+        <div class="value" id="bytes_sent-value"></div>
+      </div>
+      <div id="cpu-chart" class="chart">
+        <div class="chart-title">CPU Usage</div>
+        <svg width="600" height="350"></svg>
+        <div class="value" id="cpu-value"></div>
+      </div>
+      <div id="memory-chart" class="chart">
+        <div class="chart-title">Memory Usage</div>
+        <svg width="600" height="350"></svg>
+        <div class="value" id="memory-value"></div>
+      </div>
+      <div id="connections-chart" class="chart">
+        <div class="chart-title">Active Connections</div>
+        <svg width="600" height="350"></svg>
+        <div class="value" id="connections-value"></div>
+      </div>
+      <div id="latency-chart" class="chart">
+        <div class="chart-title">Network Latency</div>
+        <svg width="600" height="350"></svg>
+        <div class="value" id="latency-value"></div>
+      </div>
+    </div>
+
+    <script>
+      const metrics = [
+        {
+          id: "bytes_recv",
+          key: "bytes_recv",
+          label: "Bytes Received",
+          kind: "bytes",
+        },
+        {
+          id: "bytes_sent",
+          key: "bytes_sent",
+          label: "Bytes Sent",
+          kind: "bytes",
+        },
+        { id: "cpu", key: "cpu_percent", label: "CPU", kind: "percent" },
+        {
+          id: "memory",
+          key: "memory_percent",
+          label: "Memory",
+          kind: "percent",
+        },
+        {
+          id: "connections",
+          key: "active_connections",
+          label: "Connections",
+          kind: "count",
+        },
+        { id: "latency", key: "latency_ms", label: "Latency", kind: "ms" },
+      ];
+
+      const margin = { top: 20, right: 20, bottom: 30, left: 75 };
+      const svgSel = (id) => d3.select(`#${id}-chart svg`);
+
+      const width =
+        +svgSel("bytes_recv").attr("width") - margin.left - margin.right;
+      const height =
+        +svgSel("bytes_recv").attr("height") - margin.top - margin.bottom;
+
+      const x = d3.scaleTime().range([0, width]);
+
+      const formatters = {
+        bytes: d3.format(".3~s"),
+        percent: (v) => `${v.toFixed(1)}%`,
+        count: d3.format(","),
+        ms: (v) => (v == null ? "—" : `${v.toFixed(1)} ms`),
+      };
+
+      const yTickFormat = {
+        bytes: d3.format(".2~s"),
+        percent: (v) => `${v}%`,
+        count: d3.format(","),
+        ms: (v) => `${v} ms`,
+      };
+
+      const charts = {};
+      metrics.forEach((m) => {
+        const svg = svgSel(m.id);
+        const g = svg
+          .append("g")
+          .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        const y = d3.scaleLinear().range([height, 0]);
+
+        const line = d3
+          .line()
+          .defined((d) => d.value != null && !Number.isNaN(d.value))
+          .x((d) => x(d.timestamp))
+          .y((d) => y(d.value));
+
+        g.append("g")
+          .attr("class", `axis axis--x ${m.id}`)
+          .attr("transform", `translate(0,${height})`);
+
+        g.append("g").attr("class", `axis axis--y ${m.id}`);
+
+        g.append("path").attr("class", `line ${m.id}`);
+
+        charts[m.id] = { g, y, line, meta: m };
+      });
+
+      function parseSeries(raw, key) {
+        return raw.map((d) => ({
+          timestamp: new Date(d.timestamp * 1000),
+          value: d[key] === null || d[key] === undefined ? null : +d[key],
+        }));
+      }
+
+      function setValueText(metricId, kind, series) {
+        const el = document.getElementById(`${metricId}-value`);
+        if (!el) return;
+
+        const last = series[series.length - 1];
+        if (!last) {
+          el.textContent = "—";
+          return;
+        }
+
+        const v = last.value;
+        if (v == null || Number.isNaN(v)) {
+          el.textContent = "—";
+          return;
+        }
+
+        if (kind === "bytes") {
+          el.textContent = `${formatters.bytes(v)}B/s`;
+        } else if (kind === "percent") {
+          el.textContent = formatters.percent(v);
+        } else if (kind === "count") {
+          el.textContent = formatters.count(v);
+        } else if (kind === "ms") {
+          el.textContent = formatters.ms(v);
+        } else {
+          el.textContent = String(v);
+        }
+      }
+
+      async function update() {
+        try {
+          const data = await d3.json("network_data.json");
+          if (!Array.isArray(data) || data.length === 0) return;
+
+          const timestamps = data.map((d) => new Date(d.timestamp * 1000));
+          x.domain(d3.extent(timestamps));
+
+          metrics.forEach((m) => {
+            const chart = charts[m.id];
+            const series = parseSeries(data, m.key);
+
+            const maxVal =
+              d3.max(series, (d) =>
+                d.value == null || Number.isNaN(d.value) ? undefined : d.value,
+              ) ?? 0;
+
+            const paddedMax = maxVal === 0 ? 1 : maxVal * 1.15;
+
+            if (m.kind === "percent") {
+              chart.y.domain([0, 100]);
+            } else {
+              chart.y.domain([0, paddedMax]).nice();
             }
-            #charts {
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 20px;
-                padding: 20px;
-                background-color: rgba(0, 0, 0, 0.8);
-                border-radius: 10px;
-                box-shadow: 0 0 20px rgba(0, 255, 156, 0.5);
-                overflow-y: auto;
-                max-height: 90vh;
-            }
-            .chart {
-                width: 620px;
-                height: 420px;
-                background-color: rgba(255, 255, 255, 0.1);
-                border-radius: 10px;
-                padding: 10px;
-                border: 2px solid #00ff9c;
-                box-shadow: 0 0 10px #00ff9c;
-                position: relative;
-            }
-            .chart-title {
-                font-size: 20px;
-                font-weight: bold;
-                text-align: center;
-                margin-bottom: 10px;
-            }
-            .line {
-                fill: none;
-                stroke-width: 2px;
-            }
-            .line.bytes_recv {
-                stroke: #00ff9c;
-            }
-            .line.bytes_sent {
-                stroke: #ff69b4;
-            }
-            .line.cpu {
-                stroke: #ffcc00;
-            }
-            .line.memory {
-                stroke: #3399ff;
-            }
-            .line.connections {
-                stroke: #ff0033;
-            }
-            .line.latency {
-                stroke: #9933ff;
-            }
-            .axis--x path,
-            .axis--x line,
-            .axis--y path,
-            .axis--y line {
-                stroke: #333;
-            }
-            .axis--x text,
-            .axis--y text {
-                fill: aqua;
-            }
-            svg text {
-                fill: aqua;
-            }
-            .value {
-                text-align: center;
-                font-size: 18px;
-                margin-top: 10px;
-            }
-        </style>
-        <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet" />
-    </head>
-    <body>
-        <div id="charts">
-            <div id="bytes_recv-chart" class="chart">
-                <div class="chart-title">Bandwidth Usage (Bytes Received per Second)</div>
-                <svg width="600" height="350"></svg>
-                <div class="value" id="bytes_recv-value"></div>
-            </div>
-            <div id="bytes_sent-chart" class="chart">
-                <div class="chart-title">Bandwidth Usage (Bytes Sent per Second)</div>
-                <svg width="600" height="350"></svg>
-                <div class="value" id="bytes_sent-value"></div>
-            </div>
-            <div id="cpu-chart" class="chart">
-                <div class="chart-title">CPU Usage (%)</div>
-                <svg width="600" height="350"></svg>
-                <div class="value" id="cpu-value"></div>
-            </div>
-            <div id="memory-chart" class="chart">
-                <div class="chart-title">Memory Usage (%)</div>
-                <svg width="600" height="350"></svg>
-                <div class="value" id="memory-value"></div>
-            </div>
-            <div id="connections-chart" class="chart">
-                <div class="chart-title">Active Connections</div>
-                <svg width="600" height="350"></svg>
-                <div class="value" id="connections-value"></div>
-            </div>
-            <div id="latency-chart" class="chart">
-                <div class="chart-title">Network Latency (ms)</div>
-                <svg width="600" height="350"></svg>
-                <div class="value" id="latency-value"></div>
-            </div>
-        </div>
 
-        <script>
-            const metrics = ['bytes_recv', 'bytes_sent', 'cpu', 'memory', 'connections', 'latency'];
-            const svg = metrics.reduce((acc, metric) => {
-                acc[metric] = d3.select(`#${metric}-chart svg`);
-                return acc;
-            }, {});
+            chart.g.select(`.line.${m.id}`).datum(series).attr("d", chart.line);
 
-            const margin = { top: 20, right: 20, bottom: 30, left: 75 };
-            const width = +svg.bytes_recv.attr('width') - margin.left - margin.right;
-            const height = +svg.bytes_recv.attr('height') - margin.top - margin.bottom;
+            chart.g.select(`.axis--x.${m.id}`).call(d3.axisBottom(x).ticks(5));
+            chart.g.select(`.axis--y.${m.id}`).call(
+              d3
+                .axisLeft(chart.y)
+                .ticks(5)
+                .tickFormat(yTickFormat[m.kind] || d3.format("~s")),
+            );
 
-            const x = d3.scaleTime().range([0, width]);
-            const y = d3.scaleLinear().range([height, 0]);
+            setValueText(m.id, m.kind, series);
+          });
+        } catch (err) {
+          console.error("Error fetching or parsing data:", err);
+        }
+      }
 
-            const line = d3
-                .line()
-                .x((d) => x(d.timestamp))
-                .y((d) => y(d.value));
-
-            const createSvg = (metric) => {
-                const g = svg[metric].append('g').attr('transform', `translate(${margin.left},${margin.top})`);
-
-                g.append('g').attr('class', `axis axis--x ${metric}`).attr('transform', `translate(0,${height})`);
-
-                g.append('g').attr('class', `axis axis--y ${metric}`);
-
-                g.append('path').attr('class', `line ${metric}`);
-
-                return g;
-            };
-
-            const gs = metrics.reduce((acc, metric) => {
-                acc[metric] = createSvg(metric);
-                return acc;
-            }, {});
-
-            const update = () => {
-                d3.json('network_data.json')
-                    .then((data) => {
-                        const parseData = (key) => {
-                            return data.map((d) => ({
-                                timestamp: new Date(d.timestamp * 1000),
-                                value: +d[key],
-                            }));
-                        };
-
-                        const metricData = {
-                            bytes_recv: parseData('bytes_recv'),
-                            bytes_sent: parseData('bytes_sent'),
-                            cpu: parseData('cpu_percent'),
-                            memory: parseData('memory_percent'),
-                            connections: parseData('active_connections'),
-                            latency: parseData('latency'),
-                        };
-
-                        Object.keys(metricData).forEach((metric) => {
-                            x.domain(d3.extent(metricData[metric], (d) => d.timestamp));
-                            y.domain([0, d3.max(metricData[metric], (d) => d.value)]);
-
-                            gs[metric].select(`.line.${metric}`).datum(metricData[metric]).attr('d', line);
-
-                            gs[metric].select(`.axis--x.${metric}`).call(d3.axisBottom(x));
-
-                            gs[metric].select(`.axis--y.${metric}`).call(d3.axisLeft(y));
-
-                            document.getElementById(`${metric}-value`).textContent =
-                                metric === 'latency'
-                                    ? Number(metricData[metric][metricData[metric].length - 1].value).toFixed(3)
-                                    : metricData[metric][metricData[metric].length - 1].value;
-                        });
-                    })
-                    .catch((error) => {
-                        console.error('Error fetching or parsing data: ', error);
-                    });
-            };
-
-            update();
-            setInterval(update, 1000);
-        </script>
-    </body>
+      update();
+      setInterval(update, 1000);
+    </script>
+  </body>
 </html>
