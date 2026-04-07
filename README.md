@@ -35,3 +35,13 @@ Below are the software programs and installation steps needed for this applicati
 6. Run the script with the command `python3 app.py`
 
 7. Start a second web server for the frontend, by using the Live Server Visual Studio Code extension
+
+## Other Considerations
+
+This project repo is intended to demonstrate an ability to do the following:
+
+- Monitor computer system and network metrics in Python and serve them as a JSON data source
+
+- Visualize real-time metrics in the browser using D3.js as line charts updating every second
+
+If you have any questions or would like to collaborate, please reach out either on GitHub or via [my website](https://bretbernhoft.com/).
