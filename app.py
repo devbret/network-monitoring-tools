@@ -73,7 +73,7 @@ def save_network_data() -> None:
         time.sleep(SAVE_INTERVAL_SECONDS)
 
 
-def run_server(port: int = 8000) -> None:
+def run_server(port: int = 8500) -> None:
     handler = SimpleHTTPRequestHandler
     httpd = HTTPServer(("localhost", port), handler)
     httpd.serve_forever()
