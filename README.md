@@ -54,7 +54,7 @@ This project repo is intended to demonstrate an ability to do the following:
 
 - Monitor network activity, system resource usage, active connections and latency in real time
 
-- Collect network metrics every second and save the most recent samples to a JSON file
+- Collect network metrics every second and push the most recent samples to memory
 
 - Serve live network performance data through a local web server for browser-based visualization
 
