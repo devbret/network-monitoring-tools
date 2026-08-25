@@ -40,7 +40,7 @@ const formatters = {
   bytes: d3.format(".3~s"),
   percent: (v) => `${v.toFixed(1)}%`,
   count: d3.format(","),
-  ms: (v) => (v == null ? "—" : `${v.toFixed(1)} ms`),
+  ms: (v) => (v == null ? "-" : `${v.toFixed(1)} ms`),
 };
 
 const yTickFormat = {
@@ -89,13 +89,13 @@ function setValueText(metricId, kind, series) {
 
   const last = series[series.length - 1];
   if (!last) {
-    el.textContent = "—";
+    el.textContent = "-";
     return;
   }
 
   const v = last.value;
   if (v == null || Number.isNaN(v)) {
-    el.textContent = "—";
+    el.textContent = "-";
     return;
   }
 
@@ -114,7 +114,7 @@ function setValueText(metricId, kind, series) {
 
 async function update() {
   try {
-    const data = await d3.json("network_data.json");
+    const data = await d3.json("/api/metrics");
     if (!Array.isArray(data) || data.length === 0) return;
 
     const timestamps = data.map((d) => new Date(d.timestamp * 1000));
