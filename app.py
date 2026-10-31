@@ -1,4 +1,6 @@
+import ipaddress
 import json
+import logging
 import socket
 import threading
 import time
@@ -11,6 +13,10 @@ import psutil
 
 MAX_SAMPLES = 60
 MONITOR_INTERVAL_SECONDS = 1
+CONNECTION_SCAN_INTERVAL_SECONDS = 1
+LATENCY_HOST = "google.com"
+LATENCY_PORT = 443
+LATENCY_TIMEOUT_SECONDS = 1.0
 
 BASE_DIR = Path(__file__).resolve().parent
 METRICS_PATH = "/api/metrics"
@@ -22,43 +28,159 @@ STATIC_ROUTES = {
     "/main.js": ("main.js", "text/javascript; charset=utf-8"),
 }
 
+log = logging.getLogger("network_monitor")
+
 network_data = []
 network_data_lock = threading.Lock()
 
 
-def tcp_latency_ms(host: str = "google.com", port: int = 443, timeout: float = 1.0) -> float | None:
-    start = time.perf_counter()
+def is_loopback_address(address: str) -> bool:
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return (time.perf_counter() - start) * 1000.0
-    except OSError:
-        return None
+        return ipaddress.ip_address(address.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
 
 
-def monitor_network(interval: float = MONITOR_INTERVAL_SECONDS) -> None:
-    previous_net_io = psutil.net_io_counters()
+def loopback_interfaces() -> frozenset[str]:
+    names = set()
+    for nic, addresses in psutil.net_if_addrs().items():
+        for addr in addresses:
+            if addr.family in (socket.AF_INET, socket.AF_INET6) and is_loopback_address(addr.address):
+                names.add(nic)
+                break
+    return frozenset(names)
+
+
+def external_io_counters(exclude: frozenset[str]) -> tuple[int, int]:
+    sent = recv = 0
+    for nic, counters in psutil.net_io_counters(pernic=True).items():
+        if nic in exclude:
+            continue
+        sent += counters.bytes_sent
+        recv += counters.bytes_recv
+    return sent, recv
+
+
+class LatencyProbe:
+    def __init__(self, host: str, port: int, timeout: float) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self._target: tuple[int, tuple] | None = None
+
+    @property
+    def remote(self) -> tuple[str, int] | None:
+        target = self._target
+        if target is None:
+            return None
+        sockaddr = target[1]
+        return sockaddr[0], sockaddr[1]
+
+    def _resolve(self) -> tuple[int, tuple] | None:
+        try:
+            infos = socket.getaddrinfo(self.host, self.port, type=socket.SOCK_STREAM)
+        except OSError:
+            return None
+        if not infos:
+            return None
+        family, _socktype, _proto, _canonname, sockaddr = infos[0]
+        return family, sockaddr
+
+    def measure(self) -> float | None:
+        if self._target is None:
+            self._target = self._resolve()
+            if self._target is None:
+                return None
+
+        family, sockaddr = self._target
+        start = time.perf_counter()
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.settimeout(self.timeout)
+                sock.connect(sockaddr)
+        except OSError:
+            self._target = None
+            return None
+        return (time.perf_counter() - start) * 1000.0
+
+
+class ConnectionCounter:
+    def __init__(self, interval: float, probe: LatencyProbe | None = None) -> None:
+        self.interval = interval
+        self.probe = probe
+        self._count: int | None = None
+        self._lock = threading.Lock()
+        self._access_warned = False
+
+    @property
+    def count(self) -> int | None:
+        with self._lock:
+            return self._count
+
+    def scan(self) -> int | None:
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except psutil.AccessDenied:
+            if not self._access_warned:
+                log.warning("Cannot list connections without elevated privileges; reporting none")
+                self._access_warned = True
+            return None
+
+        ignored = self.probe.remote if self.probe is not None else None
+        total = 0
+        for conn in connections:
+            if conn.status != psutil.CONN_ESTABLISHED or not conn.raddr:
+                continue
+            if is_loopback_address(conn.raddr.ip):
+                continue
+            if ignored is not None and (conn.raddr.ip, conn.raddr.port) == ignored:
+                continue
+            total += 1
+        return total
+
+    def run(self) -> None:
+        while True:
+            try:
+                count = self.scan()
+            except Exception:
+                log.exception("Connection scan failed")
+                count = None
+            with self._lock:
+                self._count = count
+            time.sleep(self.interval)
+
+
+def monitor_network(
+    interval: float,
+    probe: LatencyProbe,
+    connections: ConnectionCounter,
+) -> None:
+    loopback = loopback_interfaces()
+    previous_sent, previous_recv = external_io_counters(loopback)
+    previous_time = time.monotonic()
     psutil.cpu_percent(interval=None)
 
     while True:
         time.sleep(interval)
 
-        current_net_io = psutil.net_io_counters()
-        metrics: dict[str, object] = {}
-        metrics["timestamp"] = time.time()
-
-        metrics["bytes_sent"] = current_net_io.bytes_sent - previous_net_io.bytes_sent
-        metrics["bytes_recv"] = current_net_io.bytes_recv - previous_net_io.bytes_recv
-        previous_net_io = current_net_io
-
-        metrics["cpu_percent"] = psutil.cpu_percent(interval=None)
-        metrics["memory_percent"] = psutil.virtual_memory().percent
-
         try:
-            metrics["active_connections"] = len(psutil.net_connections())
-        except Exception:
-            metrics["active_connections"] = None
+            sent, recv = external_io_counters(loopback)
+            now = time.monotonic()
+            elapsed = now - previous_time
 
-        metrics["latency_ms"] = tcp_latency_ms("google.com", 443, timeout=1.0)
+            metrics: dict[str, object] = {
+                "timestamp": time.time(),
+                "bytes_sent": round(max(0, sent - previous_sent) / elapsed, 1),
+                "bytes_recv": round(max(0, recv - previous_recv) / elapsed, 1),
+                "cpu_percent": psutil.cpu_percent(interval=None),
+                "memory_percent": psutil.virtual_memory().percent,
+                "active_connections": connections.count,
+                "latency_ms": probe.measure(),
+            }
+            previous_sent, previous_recv, previous_time = sent, recv, now
+        except Exception:
+            log.exception("Metric collection failed; skipping this sample")
+            continue
 
         with network_data_lock:
             network_data.append(metrics)
@@ -124,5 +246,15 @@ def run_server(host: str = "localhost", port: int = 8500) -> None:
 
 
 if __name__ == "__main__":
-    threading.Thread(target=monitor_network, daemon=True).start()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    probe = LatencyProbe(LATENCY_HOST, LATENCY_PORT, LATENCY_TIMEOUT_SECONDS)
+    connections = ConnectionCounter(CONNECTION_SCAN_INTERVAL_SECONDS, probe)
+
+    threading.Thread(target=connections.run, daemon=True).start()
+    threading.Thread(
+        target=monitor_network,
+        args=(MONITOR_INTERVAL_SECONDS, probe, connections),
+        daemon=True,
+    ).start()
     run_server()
